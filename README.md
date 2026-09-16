@@ -1,110 +1,108 @@
-# Voice-to-Type Native Keyboard
+# Work Trial Task: Durable Background Agent Streams
 
-Build a mini WisprFlow-style iOS experience: a native keyboard that lets a user speak and insert the resulting text into whatever app they are typing in.
+Build a system that streams the output of long-running background agents
+durably, so a client can disconnect and reconnect at any time and resume the
+stream with no loss and no duplicates.
 
-This is a mobile engineering task first. The backend only needs to be good enough to support a low-latency voice-to-text loop.
+The goal is to evaluate how you think about durable event streams, delivery
+guarantees, reconnection, backpressure, and storage tradeoffs. Scope this as a
+credible 6-hour prototype. We care more about a thoughtful, working vertical
+slice than a broad unfinished system.
 
-## What to Build
+## The Problem
 
-Create an iOS app with three parts:
+A background agent can run for a long time — seconds to hours. As it runs it
+emits a stream of events: model tokens, tool calls, status changes, retries,
+errors, and a final result.
 
-1. A React Native containing app for setup, permissions, account/status UI, and any supporting product surface you think is useful.
-2. A Swift custom keyboard extension that appears as a real iOS keyboard, lets the user trigger voice input, and inserts transcribed text into the active text field.
-3. A small TypeScript server that receives audio or audio chunks, calls an existing speech-to-text model/API, and returns transcript results quickly.
+A user watches that stream in a browser. But the connection is not reliable and
+the run does not depend on it:
 
-The goal is not to clone every WisprFlow feature. The goal is to build the smallest convincing end-to-end slice that shows you understand native iOS constraints, React Native integration, voice UX, and latency tradeoffs.
+- The user closes their laptop, switches networks, or reloads the tab.
+- The server restarts mid-run.
+- A second tab or device attaches to the same run.
+- Every viewer leaves, and the agent keeps working alone.
 
-## Core Requirements
+The agent must keep running and producing regardless, and any client that
+(re)connects must be able to catch up to the exact current state and then
+follow the live tail.
 
-Your submission should include:
+## What To Build
 
-- A working React Native iOS app that can be built and run locally.
-- A Swift keyboard extension that can be enabled in iOS Settings and used in another app.
-- A voice-to-text flow from keyboard interaction to transcript insertion.
-- A simple TypeScript backend with clear setup instructions.
-- A README or notes section explaining your architecture, important tradeoffs, known limitations, and what you would improve next.
+A local full-stack prototype with:
 
-You may use any reasonable existing speech model or API. Do not spend time training models or building production infrastructure.
+- A background agent runner that produces a realistic, long event stream. A
+  simulator is fine — you do not need to call a real model.
+- A durable, append-only stream store so a run survives server restarts and
+  keeps recording when no client is connected.
+- A server that lets a client start a run, subscribe to its stream, and resume
+  from a cursor after a disconnect.
+- A minimal web UI to start a run and watch it live, with an obvious way to
+  drop and restore the connection to show seamless resume.
 
-## iOS Constraints to Consider
+## Requirements
 
-iOS custom keyboards run as app extensions, which means they have a different lifecycle and permission model than a normal app. A strong solution should show awareness of these constraints rather than hiding them.
+The hard part is the delivery model. Your system should:
 
-In particular:
+- Assign every event a stable, monotonic cursor within a run.
+- Let a client resume from its last cursor and receive every event after it,
+  in order, exactly once — no gaps, no duplicates.
+- Serve a late joiner the full history from the start, then switch to the live
+  tail without missing events in between.
+- Support multiple concurrent subscribers on one run, each with an independent
+  position.
+- Keep the producer from stalling when a consumer is slow or gone
+  (backpressure / buffering).
+- Persist the whole run so a client that connects after it finishes still gets
+  the complete stream, including its final status.
+- Survive a server restart mid-run without corrupting or losing the stream.
 
-- Custom keyboards need a way to switch to the next keyboard.
-- Some input fields do not allow custom keyboards.
-- Network-backed keyboard behavior requires open access and explicit user permission.
-- Keyboard extensions have sandboxing and lifecycle limits that affect audio capture, shared state, and backend communication.
+Pick a transport that fits (SSE, WebSocket, long-poll) and say why.
 
-Useful Apple references:
+## Storage Decision
 
-- [Custom Keyboard](https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/CustomKeyboard.html)
-- [Configuring open access for a custom keyboard](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard)
+Choose where the durable log lives — SQLite, Postgres, Redis Streams, a log
+file, or another justified option — and include a short note covering:
 
-We do not expect perfection around every platform edge case. We do expect you to identify the major constraints and make practical choices.
+- Why you chose it.
+- How ordering and the resume cursor are implemented.
+- Retention: how long streams are kept and how they are truncated.
+- What you would change for many concurrent runs, very long streams, and
+  fan-out to many subscribers.
 
-## Product Expectations
+We do not expect production infrastructure, but we do expect production
+judgment.
 
-The experience should feel like a real product slice, not just a demo screen.
+## Non-Goals
 
-At minimum, think through:
+Do not spend time on:
 
-- How the user starts and stops voice input.
-- How pending, partial, successful, and failed transcription states are shown.
-- How quickly text appears after speech.
-- What happens if permissions, network access, or the backend fail.
-- How the user understands setup steps for enabling the keyboard.
+- Authentication, billing, or multi-tenant account management.
+- Cloud deployment.
+- Calling real models or real tools.
+- Pixel-perfect UI polish.
 
-Prefer a focused, reliable flow over a broad set of unfinished features.
+Hardcoding local development credentials and IDs is fine if you note the
+tradeoff.
 
-## Backend Scope
+## Deliverables
 
-Keep the backend simple. A good implementation might expose one or two endpoints for uploading/streaming audio and receiving transcript results.
+Submit a GitHub repository containing:
 
-We care about:
+- A working local app with setup and run instructions.
+- The agent runner / simulator that produces the stream.
+- A short architecture note covering the stream and event model, the delivery
+  and resume guarantees, the transport choice, the storage choice, and how you
+  handle backpressure and server restarts.
+- Notes on what you intentionally skipped.
 
-- Clean TypeScript code.
-- A clear API contract between the keyboard/app and server.
-- Reasonable handling of latency, errors, and retries.
-- A short explanation of whether you chose whole-file upload, chunking, streaming, or another approach.
+## Success Criteria
 
-We do not care about:
+A strong submission demonstrates end-to-end thinking about durable streams:
 
-- Auth beyond what is needed for a local demo.
-- Persistent storage unless you need it for your design.
-- Complex deployment setup.
-- Building your own speech model.
-
-## What We Evaluate
-
-We will primarily evaluate:
-
-- Native iOS judgment: keyboard extension setup, Swift implementation, permissions, lifecycle, text insertion, and platform limitations.
-- React Native integration: clean app structure, native boundary choices, and setup flow.
-- Voice UX: fast feedback, sensible states, interruption handling, and text insertion behavior.
-- Latency and systems thinking: audio flow, backend contract, model/API choice, and bottleneck awareness.
-- Code quality: readability, pragmatic architecture, local setup, and scoped implementation.
-- Communication: clear tradeoff notes and good questions when you hit uncertainty.
-
-## Optional Stretch
-
-If the core flow is working well, you can add one small extension:
-
-- Live Activity or another iOS status surface for active transcription.
-- Partial transcript updates while speech is still being processed.
-- Latency instrumentation with a short bottleneck analysis.
-- Better fallback behavior for failed permissions, no network, or backend errors.
-
-Treat this as optional. A polished core flow is better than several incomplete extras.
-
-## Submission
-
-Submit the repo with:
-
-- Clear setup instructions for the iOS app and backend.
-- Any required environment variables listed with example names.
-- A short architecture/tradeoff writeup.
-- Notes on what works, what is incomplete, and what you would do next.
-
-We will run the project locally and review the code, product behavior, and tradeoff notes together.
+- Reconnect mid-run and resume with no gaps or duplicates.
+- A late joiner and a live viewer both see a correct, ordered stream.
+- The run completes even with no client connected, and replays fully
+  afterward.
+- Clear reasoning about ordering, retention, backpressure, and what changes at
+  scale.
